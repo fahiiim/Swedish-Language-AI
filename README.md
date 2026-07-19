@@ -29,9 +29,12 @@ Set the credentials in `.env`:
 AWS_ACCESS_KEY_ID=your-access-key-id
 AWS_SECRET_ACCESS_KEY=your-secret-access-key
 AWS_REGION=us-east-1
+CORS_ORIGIN_REGEX=^https?://(localhost|127\.0\.0\.1|10\.10\.28\.[0-9]{1,3})(:[0-9]{1,5})?$
 ```
 
 Never commit a populated `.env` file. In deployed AWS environments, the standard boto3 credential chain can use an IAM role instead.
+
+The default CORS pattern permits HTTP or HTTPS frontends on `localhost`, `127.0.0.1`, and the `10.10.28.x` development network using any port. Replace `CORS_ORIGIN_REGEX` with the exact deployed frontend origin pattern in production.
 
 ## Run
 
