@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.bedrock import (
     BedrockAuthenticationError,
@@ -11,6 +12,7 @@ from app.bedrock import (
     InvalidModelResponseError,
     generate_question as generate_bedrock_question,
 )
+from app.config import CORS_ORIGIN_REGEX
 from app.schemas import QuestionResponse
 
 
@@ -20,6 +22,13 @@ app = FastAPI(
     title="Swedish Citizenship Question API",
     description="Generates Swedish citizenship test questions with Amazon Nova Lite.",
     version="1.0.0",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
+    allow_credentials=False,
+    allow_methods=["POST"],
+    allow_headers=["*"],
 )
 
 
