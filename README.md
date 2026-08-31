@@ -88,20 +88,19 @@ Actions**:
 | --- | --- | --- |
 | `AWS_ACCESS_KEY_ID` | Yes | Credentials for a dedicated AWS deployment identity |
 | `AWS_SECRET_ACCESS_KEY` | Yes | Secret for that deployment identity |
-| `AWS_SESSION_TOKEN` | Only for temporary credentials | Session token |
+| `AWS_REGION` | No | AWS region; defaults to `us-east-1` |
+| `CORS_ORIGIN_REGEX` | Yes | Exact frontend origin regex, such as `^https://app\.example\.com$` |
+| `CERTIFICATE_ARN` | Production HTTPS | ACM certificate ARN in the deployment region |
+| `PUBLIC_BASE_URL` | HTTPS smoke test | Public DNS URL covered by that certificate |
 
 The deployment identity must be allowed to manage the CloudFormation, ECR, VPC,
 ECS, load balancer, WAF, CloudWatch Logs, autoscaling, and project IAM resources
-defined under `infra/`. Do not reuse a personal administrator access key.
+defined under `infra/`. Do not reuse a personal administrator access key. No
+GitHub Actions variables or AWS session token are required.
 
-Add these repository variables:
-
-| Variable | Required | Value |
-| --- | --- | --- |
-| `AWS_REGION` | No | Defaults to `us-east-1` |
-| `CORS_ORIGIN_REGEX` | Yes | Exact HTTPS frontend regex, such as `^https://app\.example\.com$` |
-| `CERTIFICATE_ARN` | Production HTTPS | ACM certificate ARN in the deployment region |
-| `PUBLIC_BASE_URL` | HTTPS smoke test | Public DNS URL covered by that certificate |
+The host and port are not secrets. The container listens on `0.0.0.0:8000`;
+ECS routes the load balancer to that port and exposes the service publicly on
+port `80`, or `443` when `CERTIFICATE_ARN` is configured.
 
 When `CERTIFICATE_ARN` is provided, the ALB redirects HTTP to HTTPS. Create a DNS
 alias/CNAME that points the public hostname to the `LoadBalancerDnsName`
