@@ -125,7 +125,7 @@ jobs:
             printf 'BEDROCK_MODEL_ID=amazon.nova-lite-v1:0\n'
             printf 'BEDROCK_CONNECT_TIMEOUT_SECONDS=5\n'
             printf 'BEDROCK_READ_TIMEOUT_SECONDS=60\n'
-            printf 'DOCS_ENABLED=false\n'
+            printf 'DOCS_ENABLED=true\n'
             printf 'LOG_LEVEL=INFO\n'
           } > "/tmp/${IMAGE_NAME}-${GITHUB_SHA}.env"
 

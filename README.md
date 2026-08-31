@@ -145,7 +145,7 @@ and repeatedly invalid generated content returns `502`. Responses include an
 | `BEDROCK_MODEL_ID` | `amazon.nova-lite-v1:0` | Bedrock foundation model |
 | `BEDROCK_CONNECT_TIMEOUT_SECONDS` | `5` | SDK connection timeout |
 | `BEDROCK_READ_TIMEOUT_SECONDS` | `60` | SDK response timeout |
-| `DOCS_ENABLED` | `true` | Enables `/docs`; production example disables it |
+| `DOCS_ENABLED` | `true` | Enables `/docs` and `/openapi.json` |
 | `LOG_LEVEL` | `INFO` | Application log level |
 | `PORT` | `8000` | Internal container port |
 
