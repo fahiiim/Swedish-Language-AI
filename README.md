@@ -93,8 +93,9 @@ Actions variables, AWS session token, or CORS value is required.
 
 ## Deploy
 
-Pushes and pull requests run tests and build the Docker image but do not deploy.
-To deploy intentionally:
+Pull requests run tests and build the Docker image but do not deploy. A push to
+`main` deploys automatically after the quality job passes. You can also deploy
+manually:
 
 1. Open **GitHub → Actions → CI/CD**.
 2. Choose **Run workflow**.
