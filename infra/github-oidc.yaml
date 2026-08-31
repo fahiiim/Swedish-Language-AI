@@ -1,0 +1,159 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: GitHub OIDC deployment role and CloudFormation execution role.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: swedish-language-ai
+    AllowedPattern: "[a-z][a-z0-9-]{2,31}"
+  GitHubRepository:
+    Type: String
+    Description: Repository in owner/name form.
+    AllowedPattern: "[^/]+/[^/]+"
+  CreateGitHubOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+
+Conditions:
+  ShouldCreateGitHubOidcProvider: !Equals [!Ref CreateGitHubOidcProvider, "true"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateGitHubOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+      Tags:
+        - Key: Application
+          Value: !Ref ProjectName
+
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-cloudformation-execution"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: ManageApplicationRoles
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageProjectRoles
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-*"
+              - Sid: CreateEcsServiceLinkedRole
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName:
+                      - ecs.amazonaws.com
+                      - ecs.application-autoscaling.amazonaws.com
+                      - elasticloadbalancing.amazonaws.com
+      Tags:
+        - Key: Application
+          Value: !Ref ProjectName
+
+  GitHubDeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-github-deployment"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateGitHubOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubRepository}:environment:production"
+                  - !Sub "repo:${GitHubRepository}@*:environment:production"
+      Policies:
+        - PolicyName: DeployApplication
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageProjectStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ListStackResources
+                  - cloudformation:UpdateStack
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ProjectName}-*/*"
+              - Sid: ManageDeploymentChangeSets
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              - Sid: UseCloudFormationExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationExecutionRole.Arn
+              - Sid: AuthenticateToEcr
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - sts:GetCallerIdentity
+                Resource: "*"
+              - Sid: PushReleaseImages
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !Sub "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${ProjectName}"
+      Tags:
+        - Key: Application
+          Value: !Ref ProjectName
+
+Outputs:
+  GitHubDeploymentRoleArn:
+    Description: Set this as the GitHub repository variable AWS_ROLE_ARN.
+    Value: !GetAtt GitHubDeploymentRole.Arn
+  CloudFormationExecutionRoleArn:
+    Description: Set this as CLOUDFORMATION_EXECUTION_ROLE_ARN.
+    Value: !GetAtt CloudFormationExecutionRole.Arn
