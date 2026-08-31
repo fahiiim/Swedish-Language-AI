@@ -1,32 +1,31 @@
 # Swedish Citizenship Question API
 
-A production-ready FastAPI service that uses Amazon Nova Lite through the AWS
-Bedrock Converse API to generate validated Swedish citizenship practice
-questions.
+A FastAPI service that generates validated Swedish citizenship practice
+questions with Amazon Nova Lite through AWS Bedrock.
 
-## What is included
+## Deployment target
 
-- FastAPI API with strict Pydantic response validation
-- Non-blocking Bedrock calls, bounded SDK timeouts, and retry handling
-- Health checks, request IDs, security headers, and JSON production logs
-- Non-root, read-only, multi-stage Docker image
-- Automated linting, tests, container smoke tests, ECR publishing, and ECS rollout
-- CloudFormation for ECR, VPC, ALB, WAF rate limiting, ECS Fargate, IAM,
-  CloudWatch, deployment rollback, and CPU autoscaling
+The production target is one AWS EC2 instance with an Elastic IP. Docker keeps
+the application isolated inside the instance:
 
-The AWS design places two ECS tasks in private subnets across two Availability
-Zones. An Application Load Balancer is public, and the application task role can
-invoke only the configured Bedrock foundation model.
+- Public address: `http://ELASTIC_IP:8005`
+- EC2 host port: `8005`
+- Container port: `8000`
+- Health check: `http://ELASTIC_IP:8005/health`
+- API endpoint: `POST http://ELASTIC_IP:8005/generate-question`
+
+The project does not use ECS, an Application Load Balancer, ECR, CloudFormation,
+OIDC, or CORS configuration.
 
 ## Local development
 
 Requirements:
 
 - Python 3.12+
-- AWS credentials from the standard SDK credential chain
-- Bedrock access to `amazon.nova-lite-v1:0` in the selected region
+- AWS credentials from the standard boto3 credential chain
+- Bedrock permission for `amazon.nova-lite-v1:0`
 
-Create the environment and install the locked development dependencies:
+Set up the project:
 
 ```powershell
 python -m venv .venv
@@ -35,25 +34,24 @@ python -m pip install --requirement requirements-dev.txt
 Copy-Item .env.example .env
 ```
 
-Prefer an AWS SSO/profile session over long-lived keys:
+Run it directly on port `8005`:
 
 ```powershell
-aws sso login --profile your-profile
+uvicorn app.main:app --host 0.0.0.0 --port 8005 --reload
 ```
 
-Set `AWS_PROFILE=your-profile` in `.env`, then run:
+Or run it with Docker Compose:
 
 ```powershell
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+docker compose up --build
 ```
 
-Useful URLs:
+Then open:
 
-- Health: `http://localhost:8000/health`
-- OpenAPI UI: `http://localhost:8000/docs`
-- Generate: `POST http://localhost:8000/generate-question`
+- `http://localhost:8005/health`
+- `http://localhost:8005/docs`
 
-Run the quality checks locally:
+Run checks:
 
 ```powershell
 ruff check .
@@ -61,76 +59,60 @@ ruff format --check .
 pytest
 ```
 
-## Docker
+## Prepare the EC2 instance
 
-Build and run the same image used in production:
+The instance needs Docker, `curl`, and `gzip`. Its SSH user must be able to run
+Docker with `sudo` without an interactive password.
 
-```powershell
-docker build -t swedish-language-ai .
-docker compose up --build
-```
+The deployment workflow creates `/opt/swedish-language-ai/.env` on the instance
+from the encrypted GitHub secrets and restricts it to root access.
 
-`compose.yaml` reads the ignored `.env` file. A container cannot automatically
-use a profile stored on the host, so supply temporary AWS credentials to the
-container when testing the Bedrock endpoint. ECS does not need credential
-variables because it receives credentials from its task IAM role.
+The EC2 security group must allow:
 
-## GitHub Actions deployment setup
+- SSH port `22` from the intended deployment source
+- Application port `8005` from the clients that should reach the API
 
-The deployment creates billable resources, including an Application Load
-Balancer, NAT Gateways, WAF, and Fargate tasks. Review current AWS pricing before
-deploying.
+## GitHub Actions secrets
 
-Add these encrypted repository secrets under **Settings → Secrets and variables →
-Actions**:
+Go to **Repository Settings → Secrets and variables → Actions → Secrets** and
+create only these secrets:
 
-| Secret | Required | Purpose |
+| Secret | Required | Value |
 | --- | --- | --- |
-| `AWS_ACCESS_KEY_ID` | Yes | Credentials for a dedicated AWS deployment identity |
-| `AWS_SECRET_ACCESS_KEY` | Yes | Secret for that deployment identity |
-| `AWS_REGION` | No | AWS region; defaults to `us-east-1` |
-| `CORS_ORIGIN_REGEX` | Yes | Exact frontend origin regex, such as `^https://app\.example\.com$` |
-| `CERTIFICATE_ARN` | Production HTTPS | ACM certificate ARN in the deployment region |
-| `PUBLIC_BASE_URL` | HTTPS smoke test | Public DNS URL covered by that certificate |
+| `EC2_HOST` | Yes | The EC2 Elastic IP, without `http://` or a port |
+| `EC2_USER` | Yes | Usually `ubuntu` or `ec2-user` |
+| `EC2_SSH_PRIVATE_KEY` | Yes | Complete private SSH key, including header and footer |
+| `AWS_ACCESS_KEY_ID` | Yes | Dedicated AWS key with Bedrock invocation permission |
+| `AWS_SECRET_ACCESS_KEY` | Yes | Secret belonging to that AWS key |
+| `AWS_REGION` | No | Defaults to `us-east-1` |
+| `APP_PORT` | No | Defaults to `8005` |
 
-The deployment identity must be allowed to manage the CloudFormation, ECR, VPC,
-ECS, load balancer, WAF, CloudWatch Logs, autoscaling, and project IAM resources
-defined under `infra/`. Do not reuse a personal administrator access key. No
-GitHub Actions variables or AWS session token are required.
+The AWS identity only needs `bedrock:InvokeModel` for the selected model. It does
+not need administrator, EC2, ECR, or CloudFormation permissions. No GitHub
+Actions variables, AWS session token, or CORS value is required.
 
-The host and port are not secrets. The container listens on `0.0.0.0:8000`;
-ECS routes the load balancer to that port and exposes the service publicly on
-port `80`, or `443` when `CERTIFICATE_ARN` is configured.
+## Deploy
 
-When `CERTIFICATE_ARN` is provided, the ALB redirects HTTP to HTTPS. Create a DNS
-alias/CNAME that points the public hostname to the `LoadBalancerDnsName`
-CloudFormation output, then set `PUBLIC_BASE_URL` to that hostname.
+Pushes and pull requests run tests and build the Docker image but do not deploy.
+To deploy intentionally:
 
-### Deploy
+1. Open **GitHub → Actions → CI/CD**.
+2. Choose **Run workflow**.
+3. Run it from `main`.
 
-Run the `CI/CD` workflow manually from the GitHub Actions page when you want to
-deploy. Normal pushes and pull requests run validation only. A manual deployment
-will:
-
-1. lint, format-check, and test the Python code;
-2. build and health-check the container;
-3. authenticate to AWS with the configured GitHub secrets;
-4. provision the immutable ECR repository;
-5. push a commit-tagged image with provenance and an SBOM;
-6. deploy the image by digest through CloudFormation;
-7. wait for the ECS rolling deployment and circuit-breaker checks;
-8. verify `/health` when a directly usable endpoint is available.
-
-Production deployments are serialized to avoid overlapping CloudFormation
-updates. The ECS deployment circuit breaker automatically rolls back a release
-whose tasks do not become healthy.
+The deployment job builds the image, transfers it to the Elastic IP over SSH,
+loads it into Docker, and starts it on host port `8005`. It checks `/health` on
+the EC2 instance and from the GitHub runner. If the new container fails its local
+health check, the workflow restores the previously running image.
 
 ## API
 
 Generate a question with no request body:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:8000/generate-question
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://ELASTIC_IP:8005/generate-question
 ```
 
 Example response:
@@ -149,23 +131,21 @@ Example response:
 ```
 
 Bedrock authentication failures return `503`, invocation failures return `502`,
-and repeatedly invalid generated content returns `502`. Every response includes
-an `X-Request-ID` header for log correlation.
+and repeatedly invalid generated content returns `502`. Responses include an
+`X-Request-ID` header for log correlation.
 
-## Runtime configuration
+## Application environment
 
-| Variable | Default | Purpose |
+| Setting | Default | Purpose |
 | --- | --- | --- |
-| `APP_ENV` | `development` | Enables JSON logs when set to `production` |
-| `AWS_REGION` | `us-east-1` | Bedrock client region |
-| `AWS_PROFILE` | `default` | Optional local AWS profile; not used on ECS |
-| `BEDROCK_MODEL_ID` | `amazon.nova-lite-v1:0` | Foundation model invoked by the service |
+| `APP_ENV` | `development` | Uses JSON logging when set to `production` |
+| `AWS_REGION` | `us-east-1` | Bedrock region |
+| `AWS_PROFILE` | `default` | Optional local AWS profile |
+| `BEDROCK_MODEL_ID` | `amazon.nova-lite-v1:0` | Bedrock foundation model |
 | `BEDROCK_CONNECT_TIMEOUT_SECONDS` | `5` | SDK connection timeout |
 | `BEDROCK_READ_TIMEOUT_SECONDS` | `60` | SDK response timeout |
-| `CORS_ORIGIN_REGEX` | localhost only | Browser origins allowed by CORS |
-| `DOCS_ENABLED` | `true` | Enables `/docs` and `/openapi.json`; ECS sets `false` |
-| `LOG_LEVEL` | `INFO` | Process log level |
-| `PORT` | `8000` | Container listener port |
+| `DOCS_ENABLED` | `true` | Enables `/docs`; production example disables it |
+| `LOG_LEVEL` | `INFO` | Application log level |
+| `PORT` | `8000` | Internal container port |
 
-Never commit `.env`. In AWS, modify runtime settings through the CloudFormation
-parameters rather than adding credentials to the task definition.
+Never commit `.env` or SSH private keys.
