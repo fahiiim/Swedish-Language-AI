@@ -73,6 +73,7 @@ jobs:
     needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: production
     concurrency:
       group: swedish-language-ai-production
       cancel-in-progress: false
