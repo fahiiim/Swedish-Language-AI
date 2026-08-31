@@ -11,13 +11,12 @@ questions.
 - Health checks, request IDs, security headers, and JSON production logs
 - Non-root, read-only, multi-stage Docker image
 - Automated linting, tests, container smoke tests, ECR publishing, and ECS rollout
-- CloudFormation for ECR, GitHub OIDC, VPC, ALB, WAF rate limiting, ECS Fargate,
-  IAM, CloudWatch, deployment rollback, and CPU autoscaling
+- CloudFormation for ECR, VPC, ALB, WAF rate limiting, ECS Fargate, IAM,
+  CloudWatch, deployment rollback, and CPU autoscaling
 
 The AWS design places two ECS tasks in private subnets across two Availability
 Zones. An Application Load Balancer is public, and the application task role can
-invoke only the configured Bedrock foundation model. GitHub uses short-lived OIDC
-credentials; AWS access keys are not stored in GitHub.
+invoke only the configured Bedrock foundation model.
 
 ## Local development
 
@@ -76,70 +75,45 @@ use a profile stored on the host, so supply temporary AWS credentials to the
 container when testing the Bedrock endpoint. ECS does not need credential
 variables because it receives credentials from its task IAM role.
 
-## One-time AWS and GitHub setup
+## GitHub Actions deployment setup
 
 The deployment creates billable resources, including an Application Load
 Balancer, NAT Gateways, WAF, and Fargate tasks. Review current AWS pricing before
 deploying.
 
-### 1. Bootstrap GitHub OIDC
+Add these encrypted repository secrets under **Settings → Secrets and variables →
+Actions**:
 
-Run this once using an AWS administrator profile. Replace `OWNER/REPOSITORY`:
+| Secret | Required | Purpose |
+| --- | --- | --- |
+| `AWS_ACCESS_KEY_ID` | Yes | Credentials for a dedicated AWS deployment identity |
+| `AWS_SECRET_ACCESS_KEY` | Yes | Secret for that deployment identity |
+| `AWS_SESSION_TOKEN` | Only for temporary credentials | Session token |
 
-```powershell
-aws cloudformation deploy `
-  --stack-name swedish-language-ai-github-oidc `
-  --template-file infra/github-oidc.yaml `
-  --capabilities CAPABILITY_NAMED_IAM `
-  --parameter-overrides GitHubRepository=OWNER/REPOSITORY
-```
+The deployment identity must be allowed to manage the CloudFormation, ECR, VPC,
+ECS, load balancer, WAF, CloudWatch Logs, autoscaling, and project IAM resources
+defined under `infra/`. Do not reuse a personal administrator access key.
 
-If the AWS account already has the GitHub Actions OIDC provider, add
-`CreateGitHubOidcProvider=false`.
-
-Read the two role outputs:
-
-```powershell
-aws cloudformation describe-stacks `
-  --stack-name swedish-language-ai-github-oidc `
-  --query "Stacks[0].Outputs"
-```
-
-The bootstrap creates:
-
-- a narrowly trusted GitHub deployment role for the repository's `production`
-  environment;
-- a separate CloudFormation execution role. It has `PowerUserAccess` plus
-  project-prefixed IAM role management because this stack provisions networking,
-  ECS, load balancing, autoscaling, logs, and task roles.
-
-### 2. Configure the GitHub production environment
-
-Create a GitHub environment named `production`. Add these repository or
-environment variables:
+Add these repository variables:
 
 | Variable | Required | Value |
 | --- | --- | --- |
-| `AWS_ROLE_ARN` | Yes | `GitHubDeploymentRoleArn` stack output |
-| `CLOUDFORMATION_EXECUTION_ROLE_ARN` | Yes | `CloudFormationExecutionRoleArn` output |
 | `AWS_REGION` | No | Defaults to `us-east-1` |
 | `CORS_ORIGIN_REGEX` | Yes | Exact HTTPS frontend regex, such as `^https://app\.example\.com$` |
 | `CERTIFICATE_ARN` | Production HTTPS | ACM certificate ARN in the deployment region |
 | `PUBLIC_BASE_URL` | HTTPS smoke test | Public DNS URL covered by that certificate |
 
-No AWS access-key secrets are required.
-
 When `CERTIFICATE_ARN` is provided, the ALB redirects HTTP to HTTPS. Create a DNS
 alias/CNAME that points the public hostname to the `LoadBalancerDnsName`
 CloudFormation output, then set `PUBLIC_BASE_URL` to that hostname.
 
-### 3. Deploy
+### Deploy
 
 Push or merge to `main`. The workflow in `.github/workflows/ci-cd.yaml` will:
 
 1. lint, format-check, and test the Python code;
 2. build and health-check the container;
-3. assume the AWS role through GitHub OIDC;
+3. authenticate to AWS with the configured GitHub secrets;
 4. provision the immutable ECR repository;
 5. push a commit-tagged image with provenance and an SBOM;
 6. deploy the image by digest through CloudFormation;

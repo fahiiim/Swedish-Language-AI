@@ -72,17 +72,11 @@ jobs:
     needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    environment: production
     concurrency:
       group: swedish-language-ai-production
       cancel-in-progress: false
-    permissions:
-      contents: read
-      id-token: write
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
-      CLOUDFORMATION_EXECUTION_ROLE_ARN: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN }}
       PROJECT_NAME: swedish-language-ai
       ECR_STACK_NAME: swedish-language-ai-ecr
       ECS_STACK_NAME: swedish-language-ai-production
@@ -93,25 +87,22 @@ jobs:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Validate deployment variables
-        run: |
-          test -n "$AWS_ROLE_ARN" || { echo "Missing repository variable AWS_ROLE_ARN"; exit 1; }
-          test -n "$CLOUDFORMATION_EXECUTION_ROLE_ARN" || { echo "Missing repository variable CLOUDFORMATION_EXECUTION_ROLE_ARN"; exit 1; }
-          test -n "$CORS_ORIGIN_REGEX" || { echo "Missing repository variable CORS_ORIGIN_REGEX"; exit 1; }
+      - name: Validate deployment configuration
+        run: test -n "$CORS_ORIGIN_REGEX" || { echo "Missing repository variable CORS_ORIGIN_REGEX"; exit 1; }
 
-      - name: Configure AWS credentials through GitHub OIDC
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          role-session-name: github-${{ github.run_id }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
 
       - name: Provision container repository
         run: |
           aws cloudformation deploy \
             --stack-name "$ECR_STACK_NAME" \
             --template-file infra/ecr.yaml \
-            --role-arn "$CLOUDFORMATION_EXECUTION_ROLE_ARN" \
             --parameter-overrides "RepositoryName=$PROJECT_NAME" \
             --no-fail-on-empty-changeset \
             --tags "Application=$PROJECT_NAME" Environment=production
@@ -163,7 +154,6 @@ jobs:
           aws cloudformation deploy \
             --stack-name "$ECS_STACK_NAME" \
             --template-file infra/ecs.yaml \
-            --role-arn "$CLOUDFORMATION_EXECUTION_ROLE_ARN" \
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides "${parameters[@]}" \
             --no-fail-on-empty-changeset \

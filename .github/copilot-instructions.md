@@ -15,6 +15,6 @@
 - [x] Production and development dependencies locked
 - [x] Linting, compilation, API tests, and CloudFormation validation completed
 - [x] Non-root production Docker image and health check configured
-- [x] AWS ECS Fargate infrastructure and GitHub Actions OIDC CI/CD configured
-- [x] Live AWS deployment intentionally left to the protected GitHub environment
+- [x] AWS ECS Fargate infrastructure and GitHub Actions CI/CD configured
+- [x] Live AWS deployment intentionally left to repository Actions secrets
 - [x] Local and deployment documentation completed
