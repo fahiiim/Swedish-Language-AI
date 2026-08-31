@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -11,7 +10,6 @@ from typing import Final
 from dotenv import load_dotenv
 
 _ENV_FILE: Final[Path] = Path(__file__).resolve().parent.parent / ".env"
-_LOCAL_CORS_PATTERN: Final[str] = r"^https?://(?:localhost|127\.0\.0\.1)(?::\d{1,5})?$"
 _TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 
 
@@ -54,7 +52,6 @@ class Settings:
     bedrock_model_id: str
     bedrock_connect_timeout_seconds: int
     bedrock_read_timeout_seconds: int
-    cors_origin_regex: str
     docs_enabled: bool
     log_level: str
 
@@ -78,11 +75,9 @@ def load_settings() -> Settings:
         bedrock_read_timeout_seconds=_integer_environment(
             "BEDROCK_READ_TIMEOUT_SECONDS", 60, minimum=5, maximum=300
         ),
-        cors_origin_regex=_environment("CORS_ORIGIN_REGEX", _LOCAL_CORS_PATTERN),
         docs_enabled=_boolean_environment("DOCS_ENABLED", True),
         log_level=_environment("LOG_LEVEL", "INFO").upper(),
     )
-    re.compile(settings.cors_origin_regex)
     return settings
 
 
