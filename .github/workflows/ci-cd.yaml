@@ -1,0 +1,190 @@
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  quality:
+    name: Test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            requirements-dev.txt
+
+      - name: Install development dependencies
+        run: python -m pip install --requirement requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Check formatting
+        run: ruff format --check .
+
+      - name: Validate CloudFormation
+        run: cfn-lint infra/*.yaml
+
+      - name: Test
+        run: pytest
+
+      - name: Build container
+        run: >-
+          docker build
+          --build-arg BUILD_VERSION=${GITHUB_SHA::12}
+          --build-arg BUILD_REVISION=${GITHUB_SHA}
+          --tag swedish-language-ai:test
+          .
+
+      - name: Smoke-test container health
+        run: |
+          docker run --detach --read-only --tmpfs /tmp:size=16m \
+            --name swedish-language-ai -p 8000:8000 swedish-language-ai:test
+          for attempt in {1..12}; do
+            if curl --fail --silent http://127.0.0.1:8000/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs swedish-language-ai
+          exit 1
+
+  deploy:
+    name: Deploy production
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    concurrency:
+      group: swedish-language-ai-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      CLOUDFORMATION_EXECUTION_ROLE_ARN: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN }}
+      PROJECT_NAME: swedish-language-ai
+      ECR_STACK_NAME: swedish-language-ai-ecr
+      ECS_STACK_NAME: swedish-language-ai-production
+      CORS_ORIGIN_REGEX: ${{ vars.CORS_ORIGIN_REGEX }}
+      CERTIFICATE_ARN: ${{ vars.CERTIFICATE_ARN }}
+      PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Validate deployment variables
+        run: |
+          test -n "$AWS_ROLE_ARN" || { echo "Missing repository variable AWS_ROLE_ARN"; exit 1; }
+          test -n "$CLOUDFORMATION_EXECUTION_ROLE_ARN" || { echo "Missing repository variable CLOUDFORMATION_EXECUTION_ROLE_ARN"; exit 1; }
+          test -n "$CORS_ORIGIN_REGEX" || { echo "Missing repository variable CORS_ORIGIN_REGEX"; exit 1; }
+
+      - name: Configure AWS credentials through GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: github-${{ github.run_id }}
+
+      - name: Provision container repository
+        run: |
+          aws cloudformation deploy \
+            --stack-name "$ECR_STACK_NAME" \
+            --template-file infra/ecr.yaml \
+            --role-arn "$CLOUDFORMATION_EXECUTION_ROLE_ARN" \
+            --parameter-overrides "RepositoryName=$PROJECT_NAME" \
+            --no-fail-on-empty-changeset \
+            --tags "Application=$PROJECT_NAME" Environment=production
+
+      - name: Resolve ECR repository
+        id: repository
+        run: |
+          repository_uri=$(aws cloudformation describe-stacks \
+            --stack-name "$ECR_STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='RepositoryUri'].OutputValue" \
+            --output text)
+          test -n "$repository_uri"
+          echo "uri=$repository_uri" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Build and push immutable image
+        id: image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.repository.outputs.uri }}:sha-${{ github.sha }}-${{ github.run_attempt }}
+          build-args: |
+            BUILD_VERSION=${{ github.sha }}
+            BUILD_REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Deploy ECS service
+        env:
+          IMAGE_URI: ${{ steps.repository.outputs.uri }}@${{ steps.image.outputs.digest }}
+        run: |
+          parameters=(
+            "ProjectName=$PROJECT_NAME"
+            "EnvironmentName=production"
+            "ImageUri=$IMAGE_URI"
+            "CorsOriginRegex=$CORS_ORIGIN_REGEX"
+          )
+          if [[ -n "$CERTIFICATE_ARN" ]]; then
+            parameters+=("CertificateArn=$CERTIFICATE_ARN")
+          fi
+          aws cloudformation deploy \
+            --stack-name "$ECS_STACK_NAME" \
+            --template-file infra/ecs.yaml \
+            --role-arn "$CLOUDFORMATION_EXECUTION_ROLE_ARN" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides "${parameters[@]}" \
+            --no-fail-on-empty-changeset \
+            --tags "Application=$PROJECT_NAME" Environment=production
+
+      - name: Show service endpoint
+        id: service
+        run: |
+          service_url=$(aws cloudformation describe-stacks \
+            --stack-name "$ECS_STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='ServiceUrl'].OutputValue" \
+            --output text)
+          echo "Service endpoint: $service_url"
+          echo "url=$service_url" >> "$GITHUB_OUTPUT"
+
+      - name: Verify deployed health endpoint
+        if: env.PUBLIC_BASE_URL != '' || env.CERTIFICATE_ARN == ''
+        env:
+          STACK_URL: ${{ steps.service.outputs.url }}
+        run: |
+          base_url="${PUBLIC_BASE_URL:-$STACK_URL}"
+          curl --fail --show-error --silent \
+            --retry 12 --retry-delay 10 --retry-all-errors \
+            --max-time 10 "${base_url%/}/health"
