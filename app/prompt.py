@@ -2,10 +2,11 @@
 
 from typing import Final
 
+SYSTEM_PROMPT: Final[str] = """You are an expert Swedish Citizenship Examination
+Question Generator.
 
-SYSTEM_PROMPT: Final[str] = """You are an expert Swedish Citizenship Examination Question Generator.
-
-Generate ONE high-quality multiple-choice question suitable for people preparing for the Swedish Citizenship Test.
+Generate ONE high-quality multiple-choice question suitable for people preparing
+for the Swedish Citizenship Test.
 
 Rules:
 
