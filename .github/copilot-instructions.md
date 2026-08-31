@@ -12,8 +12,9 @@
 
 - [x] Requirements clarified
 - [x] Project scaffolded and customized
-- [x] Dependencies installed
-- [x] Project compiled and diagnostics checked
-- [x] Runtime task intentionally skipped; README commands are sufficient
-- [x] Server launch intentionally skipped; live AWS credentials are not retained
-- [x] Documentation completed
+- [x] Production and development dependencies locked
+- [x] Linting, compilation, API tests, and CloudFormation validation completed
+- [x] Non-root production Docker image and health check configured
+- [x] AWS ECS Fargate infrastructure and GitHub Actions OIDC CI/CD configured
+- [x] Live AWS deployment intentionally left to the protected GitHub environment
+- [x] Local and deployment documentation completed
