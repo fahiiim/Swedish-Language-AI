@@ -18,10 +18,9 @@ from botocore.exceptions import (
 )
 from pydantic import ValidationError
 
-from app.config import AWS_REGION, BEDROCK_MODEL_ID
+from app.config import settings
 from app.prompt import SYSTEM_PROMPT, USER_PROMPT
 from app.schemas import QuestionResponse
-
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +41,8 @@ _AUTH_ERROR_CODES: Final[frozenset[str]] = frozenset(
     }
 )
 _CLIENT_CONFIG: Final[BotoConfig] = BotoConfig(
-    connect_timeout=5,
-    read_timeout=60,
+    connect_timeout=settings.bedrock_connect_timeout_seconds,
+    read_timeout=settings.bedrock_read_timeout_seconds,
     retries={"max_attempts": 3, "mode": "standard"},
 )
 _client: Any | None = None
@@ -71,11 +70,21 @@ def _get_bedrock_client() -> Any:
             if _client is None:
                 _client = boto3.client(
                     "bedrock-runtime",
-                    region_name=AWS_REGION,
+                    region_name=settings.aws_region,
                     config=_CLIENT_CONFIG,
                 )
 
     return _client
+
+
+def close_bedrock_client() -> None:
+    """Close the cached SDK client during graceful application shutdown."""
+    global _client
+
+    with _client_lock:
+        if _client is not None:
+            _client.close()
+            _client = None
 
 
 def extract_json(text: str) -> dict[str, Any]:
@@ -118,7 +127,7 @@ def _invoke_model() -> str:
     """Invoke Amazon Nova through the Bedrock Converse API."""
     try:
         response = _get_bedrock_client().converse(
-            modelId=BEDROCK_MODEL_ID,
+            modelId=settings.bedrock_model_id,
             system=[{"text": SYSTEM_PROMPT}],
             messages=[
                 {
@@ -128,7 +137,11 @@ def _invoke_model() -> str:
             ],
             inferenceConfig={"maxTokens": 300, "temperature": 0.8},
         )
-    except (NoCredentialsError, PartialCredentialsError, CredentialRetrievalError) as exc:
+    except (
+        NoCredentialsError,
+        PartialCredentialsError,
+        CredentialRetrievalError,
+    ) as exc:
         raise BedrockAuthenticationError(
             "AWS credentials are missing, incomplete, or unavailable."
         ) from exc
