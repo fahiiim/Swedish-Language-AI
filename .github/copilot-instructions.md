@@ -13,8 +13,8 @@
 - [x] Requirements clarified
 - [x] Project scaffolded and customized
 - [x] Production and development dependencies locked
-- [x] Linting, compilation, API tests, and CloudFormation validation completed
+- [x] Linting, compilation, API tests, and workflow validation completed
 - [x] Non-root production Docker image and health check configured
-- [x] AWS ECS Fargate infrastructure and GitHub Actions CI/CD configured
-- [x] Live AWS deployment intentionally left to repository Actions secrets
+- [x] AWS EC2 Docker deployment through GitHub Actions configured
+- [x] Production deployment is manual and targets the configured Elastic IP
 - [x] Local and deployment documentation completed
