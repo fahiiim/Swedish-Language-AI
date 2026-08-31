@@ -109,7 +109,9 @@ CloudFormation output, then set `PUBLIC_BASE_URL` to that hostname.
 
 ### Deploy
 
-Push or merge to `main`. The workflow in `.github/workflows/ci-cd.yaml` will:
+Run the `CI/CD` workflow manually from the GitHub Actions page when you want to
+deploy. Normal pushes and pull requests run validation only. A manual deployment
+will:
 
 1. lint, format-check, and test the Python code;
 2. build and health-check the container;
@@ -120,9 +122,9 @@ Push or merge to `main`. The workflow in `.github/workflows/ci-cd.yaml` will:
 7. wait for the ECS rolling deployment and circuit-breaker checks;
 8. verify `/health` when a directly usable endpoint is available.
 
-Pull requests run CI but never deploy. Production deployments are serialized to
-avoid overlapping CloudFormation updates. The ECS deployment circuit breaker
-automatically rolls back a release whose tasks do not become healthy.
+Production deployments are serialized to avoid overlapping CloudFormation
+updates. The ECS deployment circuit breaker automatically rolls back a release
+whose tasks do not become healthy.
 
 ## API
 
