@@ -1,58 +1,164 @@
 # Swedish Citizenship Question API
 
-A compact FastAPI microservice that generates and validates one Swedish-language citizenship test question per request using Amazon Nova Lite through the AWS Bedrock Converse API.
+A production-ready FastAPI service that uses Amazon Nova Lite through the AWS
+Bedrock Converse API to generate validated Swedish citizenship practice
+questions.
 
-## Requirements
+## What is included
 
-- Python 3.12 or newer
-- AWS credentials with `bedrock:InvokeModel` permission
-- Amazon Nova Lite model access in `us-east-1`
+- FastAPI API with strict Pydantic response validation
+- Non-blocking Bedrock calls, bounded SDK timeouts, and retry handling
+- Health checks, request IDs, security headers, and JSON production logs
+- Non-root, read-only, multi-stage Docker image
+- Automated linting, tests, container smoke tests, ECR publishing, and ECS rollout
+- CloudFormation for ECR, GitHub OIDC, VPC, ALB, WAF rate limiting, ECS Fargate,
+  IAM, CloudWatch, deployment rollback, and CPU autoscaling
 
-## Setup
+The AWS design places two ECS tasks in private subnets across two Availability
+Zones. An Application Load Balancer is public, and the application task role can
+invoke only the configured Bedrock foundation model. GitHub uses short-lived OIDC
+credentials; AWS access keys are not stored in GitHub.
 
-Create and activate a virtual environment:
+## Local development
+
+Requirements:
+
+- Python 3.12+
+- AWS credentials from the standard SDK credential chain
+- Bedrock access to `amazon.nova-lite-v1:0` in the selected region
+
+Create the environment and install the locked development dependencies:
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
+python -m pip install --requirement requirements-dev.txt
+Copy-Item .env.example .env
 ```
 
-Install the dependencies:
+Prefer an AWS SSO/profile session over long-lived keys:
 
 ```powershell
-pip install -r requirements.txt
+aws sso login --profile your-profile
 ```
 
-Set the credentials in `.env`:
-
-```dotenv
-AWS_ACCESS_KEY_ID=your-access-key-id
-AWS_SECRET_ACCESS_KEY=your-secret-access-key
-AWS_REGION=us-east-1
-CORS_ORIGIN_REGEX=^https?://(localhost|127\.0\.0\.1|10\.10\.28\.[0-9]{1,3})(:[0-9]{1,5})?$
-```
-
-Never commit a populated `.env` file. In deployed AWS environments, the standard boto3 credential chain can use an IAM role instead.
-
-The default CORS pattern permits HTTP or HTTPS frontends on `localhost`, `127.0.0.1`, and the `10.10.28.x` development network using any port. Replace `CORS_ORIGIN_REGEX` with the exact deployed frontend origin pattern in production.
-
-## Run
+Set `AWS_PROFILE=your-profile` in `.env`, then run:
 
 ```powershell
-uvicorn app.main:app --host 10.10.28.89 --port 8005 --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-The interactive API documentation is available at `http://10.10.28.89:8005/docs`.
+Useful URLs:
 
-## Generate a question
+- Health: `http://localhost:8000/health`
+- OpenAPI UI: `http://localhost:8000/docs`
+- Generate: `POST http://localhost:8000/generate-question`
 
-The endpoint requires no request body:
+Run the quality checks locally:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://10.10.28.89:8005/generate-question
+ruff check .
+ruff format --check .
+pytest
 ```
 
-Sample response:
+## Docker
+
+Build and run the same image used in production:
+
+```powershell
+docker build -t swedish-language-ai .
+docker compose up --build
+```
+
+`compose.yaml` reads the ignored `.env` file. A container cannot automatically
+use a profile stored on the host, so supply temporary AWS credentials to the
+container when testing the Bedrock endpoint. ECS does not need credential
+variables because it receives credentials from its task IAM role.
+
+## One-time AWS and GitHub setup
+
+The deployment creates billable resources, including an Application Load
+Balancer, NAT Gateways, WAF, and Fargate tasks. Review current AWS pricing before
+deploying.
+
+### 1. Bootstrap GitHub OIDC
+
+Run this once using an AWS administrator profile. Replace `OWNER/REPOSITORY`:
+
+```powershell
+aws cloudformation deploy `
+  --stack-name swedish-language-ai-github-oidc `
+  --template-file infra/github-oidc.yaml `
+  --capabilities CAPABILITY_NAMED_IAM `
+  --parameter-overrides GitHubRepository=OWNER/REPOSITORY
+```
+
+If the AWS account already has the GitHub Actions OIDC provider, add
+`CreateGitHubOidcProvider=false`.
+
+Read the two role outputs:
+
+```powershell
+aws cloudformation describe-stacks `
+  --stack-name swedish-language-ai-github-oidc `
+  --query "Stacks[0].Outputs"
+```
+
+The bootstrap creates:
+
+- a narrowly trusted GitHub deployment role for the repository's `production`
+  environment;
+- a separate CloudFormation execution role. It has `PowerUserAccess` plus
+  project-prefixed IAM role management because this stack provisions networking,
+  ECS, load balancing, autoscaling, logs, and task roles.
+
+### 2. Configure the GitHub production environment
+
+Create a GitHub environment named `production`. Add these repository or
+environment variables:
+
+| Variable | Required | Value |
+| --- | --- | --- |
+| `AWS_ROLE_ARN` | Yes | `GitHubDeploymentRoleArn` stack output |
+| `CLOUDFORMATION_EXECUTION_ROLE_ARN` | Yes | `CloudFormationExecutionRoleArn` output |
+| `AWS_REGION` | No | Defaults to `us-east-1` |
+| `CORS_ORIGIN_REGEX` | Yes | Exact HTTPS frontend regex, such as `^https://app\.example\.com$` |
+| `CERTIFICATE_ARN` | Production HTTPS | ACM certificate ARN in the deployment region |
+| `PUBLIC_BASE_URL` | HTTPS smoke test | Public DNS URL covered by that certificate |
+
+No AWS access-key secrets are required.
+
+When `CERTIFICATE_ARN` is provided, the ALB redirects HTTP to HTTPS. Create a DNS
+alias/CNAME that points the public hostname to the `LoadBalancerDnsName`
+CloudFormation output, then set `PUBLIC_BASE_URL` to that hostname.
+
+### 3. Deploy
+
+Push or merge to `main`. The workflow in `.github/workflows/ci-cd.yaml` will:
+
+1. lint, format-check, and test the Python code;
+2. build and health-check the container;
+3. assume the AWS role through GitHub OIDC;
+4. provision the immutable ECR repository;
+5. push a commit-tagged image with provenance and an SBOM;
+6. deploy the image by digest through CloudFormation;
+7. wait for the ECS rolling deployment and circuit-breaker checks;
+8. verify `/health` when a directly usable endpoint is available.
+
+Pull requests run CI but never deploy. Production deployments are serialized to
+avoid overlapping CloudFormation updates. The ECS deployment circuit breaker
+automatically rolls back a release whose tasks do not become healthy.
+
+## API
+
+Generate a question with no request body:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/generate-question
+```
+
+Example response:
 
 ```json
 {
@@ -67,8 +173,24 @@ Sample response:
 }
 ```
 
-The service safely extracts JSON from model output, validates the complete response with Pydantic, and retries once when parsing or validation fails. Authentication failures return HTTP 503, Bedrock invocation failures return HTTP 502, and repeated invalid model output returns HTTP 500.
+Bedrock authentication failures return `503`, invocation failures return `502`,
+and repeatedly invalid generated content returns `502`. Every response includes
+an `X-Request-ID` header for log correlation.
 
-## Configuration
+## Runtime configuration
 
-The Bedrock client is created lazily once per application process and reused. To change the model, edit only `BEDROCK_MODEL_ID` in `app/config.py`.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `APP_ENV` | `development` | Enables JSON logs when set to `production` |
+| `AWS_REGION` | `us-east-1` | Bedrock client region |
+| `AWS_PROFILE` | `default` | Optional local AWS profile; not used on ECS |
+| `BEDROCK_MODEL_ID` | `amazon.nova-lite-v1:0` | Foundation model invoked by the service |
+| `BEDROCK_CONNECT_TIMEOUT_SECONDS` | `5` | SDK connection timeout |
+| `BEDROCK_READ_TIMEOUT_SECONDS` | `60` | SDK response timeout |
+| `CORS_ORIGIN_REGEX` | localhost only | Browser origins allowed by CORS |
+| `DOCS_ENABLED` | `true` | Enables `/docs` and `/openapi.json`; ECS sets `false` |
+| `LOG_LEVEL` | `INFO` | Process log level |
+| `PORT` | `8000` | Container listener port |
+
+Never commit `.env`. In AWS, modify runtime settings through the CloudFormation
+parameters rather than adding credentials to the task definition.
