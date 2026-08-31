@@ -9,7 +9,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -50,14 +49,6 @@ def create_app() -> FastAPI:
         redoc_url=None,
         openapi_url=openapi_url,
         lifespan=lifespan,
-    )
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=settings.cors_origin_regex,
-        allow_credentials=False,
-        allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", "X-Request-ID"],
-        expose_headers=["X-Request-ID"],
     )
 
     @application.middleware("http")
